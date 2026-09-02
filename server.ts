@@ -70,6 +70,7 @@ async function ensureDashboardUser() {
   if (!ATENDIMENTO_EMAIL || !ATENDIMENTO_PASSWORD) {
     throw new Error('ATENDIMENTO_EMAIL e ATENDIMENTO_PASSWORD são obrigatórios.');
   }
+  
 
   const existingUser = await prisma.dashboardUser.findUnique({ where: { email: ATENDIMENTO_EMAIL } });
   if (!existingUser) {

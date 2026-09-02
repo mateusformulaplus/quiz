@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "kill": "node -e \"const {execSync}=require('child_process');try{execSync('powershell -Command \\\"Get-NetTCPConnection -LocalPort 3000,24678 -EA SilentlyContinue | Select -Exp OwningProcess | Sort -Unique | %{ taskkill /F /PID $_ }\\\"',{stdio:'inherit'})}catch(e){}\" ",
-    "build": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "npx esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
     "prisma:generate": "prisma generate",
@@ -21,6 +21,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",
+    "esbuild": "^0.25.0",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
@@ -31,7 +32,6 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
