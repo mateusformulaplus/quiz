@@ -24,6 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // server.ts
 var import_config = require("dotenv/config");
 var import_express = __toESM(require("express"), 1);
+var import_http = __toESM(require("http"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_fs = __toESM(require("fs"), 1);
 var import_crypto = require("crypto");
@@ -44,6 +45,9 @@ var prisma = new import_client.PrismaClient();
 var databaseAvailable = Boolean(process.env.DATABASE_URL);
 var activeTokens = /* @__PURE__ */ new Map();
 var TOKEN_TTL_MS = 8 * 60 * 60 * 1e3;
+function isProduction() {
+  return process.env.NODE_ENV === "production";
+}
 function hashPassword(password) {
   return (0, import_crypto.scryptSync)(password, "formula-plus-dashboard", 64).toString("hex");
 }
@@ -60,7 +64,12 @@ async function ensureDashboardUser() {
   const existingUser = await prisma.dashboardUser.findUnique({ where: { email: ATENDIMENTO_EMAIL } });
   if (!existingUser) {
     await prisma.dashboardUser.create({
-      data: { email: ATENDIMENTO_EMAIL, passwordHash: hashPassword(ATENDIMENTO_PASSWORD) }
+      data: { email: ATENDIMENTO_EMAIL, passwordHash: hashPassword(ATENDIMENTO_PASSWORD), name: "formulaplus" }
+    });
+  } else if (existingUser.name !== "formulaplus") {
+    await prisma.dashboardUser.update({
+      where: { email: ATENDIMENTO_EMAIL },
+      data: { name: "formulaplus" }
     });
   }
 }
@@ -141,16 +150,8 @@ async function saveLeads(leads) {
 var codeCounter = 1085;
 async function startServer() {
   const app = (0, import_express.default)();
+  const httpServer = import_http.default.createServer(app);
   const PORT = Number(process.env.PORT) || 3e3;
-  try {
-    await ensureDashboardUser();
-  } catch (err) {
-    databaseAvailable = false;
-    console.error(
-      "Banco de dados indispon\xEDvel; usando armazenamento local. Verifique DATABASE_URL e DIRECT_URL.",
-      err instanceof Error ? err.message.split("\n")[0] : err
-    );
-  }
   app.use(import_express.default.json());
   app.get("/api/health", (req, res) => {
     res.json({
@@ -168,7 +169,23 @@ async function startServer() {
       const cleanEmail = String(email).trim().toLowerCase();
       const cleanPassword = String(password).trim();
       if (!databaseAvailable) {
-        return res.status(503).json({ error: "Banco de dados n\xE3o configurado." });
+        if (isProduction()) {
+          return res.status(503).json({ error: "Banco de dados n\xE3o configurado." });
+        }
+        if (cleanEmail !== ATENDIMENTO_EMAIL || cleanPassword !== ATENDIMENTO_PASSWORD) {
+          return res.status(401).json({ error: "Credenciais inv\xE1lidas." });
+        }
+        const token = (0, import_crypto.randomUUID)();
+        activeTokens.set(token, Date.now() + TOKEN_TTL_MS);
+        return res.json({
+          success: true,
+          token,
+          user: {
+            email: ATENDIMENTO_EMAIL,
+            name: "formulaplus",
+            role: "atendente_farmacia"
+          }
+        });
       }
       const user = await prisma.dashboardUser.findUnique({ where: { email: cleanEmail } });
       if (user && passwordMatches(cleanPassword, user.passwordHash)) {
@@ -567,7 +584,12 @@ async function startServer() {
   });
   if (process.env.NODE_ENV !== "production") {
     const vite = await (0, import_vite.createServer)({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: {
+          server: httpServer
+        }
+      },
       appType: "spa",
       root: FRONTEND_DIR
     });
@@ -580,20 +602,30 @@ async function startServer() {
     });
   }
   const listen = (port) => {
-    const server = app.listen(port, "0.0.0.0", () => {
+    httpServer.listen(port, "0.0.0.0", () => {
       console.log(`\u{1F680} Formula Plus Server running on http://localhost:${port}`);
-    });
-    server.once("error", (error) => {
-      if (error.code === "EADDRINUSE" && !process.env.PORT) {
-        console.warn(`Porta ${port} j\xE1 est\xE1 em uso. Tentando a porta ${port + 1}...`);
-        listen(port + 1);
-        return;
+      if (port !== PORT) {
+        console.log(`\u2139\uFE0F  Porta ${PORT} estava em uso \u2014 usando ${port} automaticamente.`);
       }
-      console.error(`N\xE3o foi poss\xEDvel iniciar o servidor na porta ${port}:`, error);
-      process.exitCode = 1;
+    });
+    httpServer.once("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        console.warn(`\u26A0\uFE0F  Porta ${port} ocupada \u2014 tentando porta ${port + 1}...`);
+        listen(port + 1);
+      } else {
+        console.error(`N\xE3o foi poss\xEDvel iniciar o servidor na porta ${port}:`, error);
+        process.exitCode = 1;
+      }
     });
   };
   listen(PORT);
+  void ensureDashboardUser().catch((err) => {
+    databaseAvailable = false;
+    console.error(
+      "Banco de dados indispon\xEDvel; usando armazenamento local. Verifique DATABASE_URL e DIRECT_URL.",
+      err instanceof Error ? err.message.split("\n")[0] : err
+    );
+  });
 }
 startServer().catch((err) => {
   console.error("Failed to start server:", err);

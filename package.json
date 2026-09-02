@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "kill": "node -e \"const {execSync}=require('child_process');try{execSync('powershell -Command \\\"Get-NetTCPConnection -LocalPort 3000,24678 -EA SilentlyContinue | Select -Exp OwningProcess | Sort -Unique | %{ taskkill /F /PID $_ }\\\"',{stdio:'inherit'})}catch(e){}\" ",
-    "build": "npm --prefix ../frontend run build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "lint": "tsc --noEmit",
     "prisma:generate": "prisma generate",
