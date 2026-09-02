@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: quizcomdash
+    runtime: node
+    buildCommand: cd frontend && npm install && cd ../backend && npm install && npm run build
+    startCommand: cd backend && npm start
+    envVars:
+      - key: NODE_ENV
+        value: production

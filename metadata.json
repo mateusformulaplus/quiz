@@ -1,0 +1,6 @@
+{
+  "name": "Formula Plus - Farmácia de Manipulação",
+  "description": "Landing page de alta conversão e quiz de qualificação para atendimento personalizado da Formula Plus.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
