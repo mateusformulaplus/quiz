@@ -4,7 +4,6 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { randomUUID, scryptSync, timingSafeEqual } from 'crypto';
-import { createServer as createViteServer } from 'vite';
 import { PrismaClient } from '@prisma/client';
 
 interface LeadRecord {
@@ -40,12 +39,6 @@ const PROJECT_DIR = fs.existsSync(path.join(process.cwd(), 'backend'))
 const BACKEND_DIR = path.join(PROJECT_DIR, 'backend');
 const DATA_DIR = path.join(BACKEND_DIR, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'leads.json');
-const FRONTEND_CANDIDATES = [
-  path.join(PROJECT_DIR, 'frontend'),
-  path.join(PROJECT_DIR, 'backend', 'frontend'),
-];
-const FRONTEND_DIR = FRONTEND_CANDIDATES.find((candidate) => fs.existsSync(path.join(candidate, 'package.json')))
-  || FRONTEND_CANDIDATES[0];
 const prisma = new PrismaClient();
 let databaseAvailable = Boolean(process.env.DATABASE_URL);
 const activeTokens = new Map<string, number>();
@@ -172,7 +165,19 @@ async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
   const PORT = Number(process.env.PORT) || 3000;
+  const frontendUrl = process.env.FRONTEND_URL?.replace(/\/$/, '');
 
+  app.use((req, res, next) => {
+    const requestOrigin = req.headers.origin;
+    if (!frontendUrl || requestOrigin === frontendUrl) {
+      if (requestOrigin) res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+      res.setHeader('Vary', 'Origin');
+    }
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
   app.use(express.json());
 
   // API Routes
@@ -183,6 +188,16 @@ async function startServer() {
       timestamp: new Date().toISOString(),
     });
   });
+
+
+
+  
+app.get("/api/health", async () => {
+    return {
+        status: "ok",
+        timestamp: new Date().toISOString()
+    }
+})
 
   // Auth Route for Atendimento Team
   app.post('/api/auth/login', async (req, res) => {
@@ -571,7 +586,7 @@ async function startServer() {
       res.json({
         success: true,
         metrics: {
-          avaliacoesIniciadas: Math.max(avaliacoesConcluidas + 8, 12),
+          avaliacoesIniciadas: avaliacoesConcluidas,
           avaliacoesConcluidas,
           usuariosQualificados: avaliacoesConcluidas,
           whatsappIniciado,
@@ -701,27 +716,6 @@ async function startServer() {
       res.status(500).json({ error: 'Erro ao gerar dados demo.' });
     }
   });
-
-  // Vite middleware in dev or static files in production
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: {
-          server: httpServer,
-        },
-      },
-      appType: 'spa',
-      root: FRONTEND_DIR,
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(FRONTEND_DIR, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
 
   // Tenta iniciar na porta desejada; se EADDRINUSE, tenta a próxima
   const listen = (port: number) => {

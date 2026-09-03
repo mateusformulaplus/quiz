@@ -1,9 +1,20 @@
 services:
   - type: web
-    name: quizcomdash
+    name: quizcomdash-api
+    rootDir: backend
     runtime: node
-    buildCommand: cd .. && npm install && npm run build
-    startCommand: cd .. && npm start
+    buildCommand: npm install --include=dev && npm run prisma:generate && npm run build
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: ATENDIMENTO_EMAIL
+        sync: false
+      - key: ATENDIMENTO_PASSWORD
+        sync: false
+      - key: FRONTEND_URL
+        value: https://quizcomdash-frontend.onrender.com
