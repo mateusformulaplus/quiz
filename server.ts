@@ -32,15 +32,13 @@ interface LeadRecord {
 const ATENDIMENTO_EMAIL = process.env.ATENDIMENTO_EMAIL?.trim().toLowerCase() || 'formulaplusrj@gmail.com';
 const ATENDIMENTO_PASSWORD = process.env.ATENDIMENTO_PASSWORD || 'Formulaplus@2026';
 
-// In-memory + file store persistence for demo/dev reliability
+// The database is the only source of truth for leads.
 const PROJECT_DIR = fs.existsSync(path.join(process.cwd(), 'backend'))
   ? process.cwd()
   : path.resolve(process.cwd(), '..');
 const BACKEND_DIR = path.join(PROJECT_DIR, 'backend');
-const DATA_DIR = path.join(BACKEND_DIR, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'leads.json');
 const prisma = new PrismaClient();
-let databaseAvailable = Boolean(process.env.DATABASE_URL);
+const databaseAvailable = Boolean(process.env.DATABASE_URL);
 const activeTokens = new Map<string, number>();
 const TOKEN_TTL_MS = 8 * 60 * 60 * 1000;
 
@@ -78,31 +76,13 @@ async function ensureDashboardUser() {
   }
 }
 
-function ensureDataFile() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-}
-
-function loadLeadsFromFile(): LeadRecord[] {
-  ensureDataFile();
-  return JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8')) as LeadRecord[];
-}
-
-function saveLeadsToFile(leads: LeadRecord[]) {
-  ensureDataFile();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(leads, null, 2), 'utf-8');
-}
-
 async function loadLeads(): Promise<LeadRecord[]> {
-  if (Boolean(process.env.DATABASE_URL)) {
-    try {
-      const dbLeads = await prisma.atendimento.findMany({ orderBy: { createdAt: 'desc' } });
-      if (dbLeads.length > 0) {
-        return dbLeads.map((lead) => ({
+  if (!databaseAvailable) {
+    throw new Error('DATABASE_URL não configurada. O banco de dados é obrigatório.');
+  }
+
+  const dbLeads = await prisma.atendimento.findMany({ orderBy: { createdAt: 'desc' } });
+  return dbLeads.map((lead) => ({
           id: lead.id,
           codigoFormatado: lead.codigoFormatado,
           nome: lead.nome,
@@ -123,14 +103,7 @@ async function loadLeads(): Promise<LeadRecord[]> {
           observacoes: lead.observacoes ?? null,
           createdAt: lead.createdAt.toISOString(),
           updatedAt: lead.updatedAt.toISOString(),
-        }));
-      }
-    } catch (err) {
-      console.error('[Supabase Read Error] Usando armazenamento local de fallback:', err);
-    }
-  }
-
-  return loadLeadsFromFile();
+  }));
 }
 
 async function getNextCodeFormatted(): Promise<string> {
@@ -161,9 +134,11 @@ async function createLeadRecord(leadData: Omit<LeadRecord, 'id' | 'codigoFormata
     updatedAt: nowStr,
   };
 
-  if (Boolean(process.env.DATABASE_URL)) {
-    try {
-      await prisma.atendimento.create({
+  if (!databaseAvailable) {
+    throw new Error('DATABASE_URL não configurada. O banco de dados é obrigatório.');
+  }
+
+  await prisma.atendimento.create({
         data: {
           id: newLead.id,
           codigoFormatado: newLead.codigoFormatado,
@@ -186,16 +161,8 @@ async function createLeadRecord(leadData: Omit<LeadRecord, 'id' | 'codigoFormata
           createdAt: new Date(newLead.createdAt),
           updatedAt: new Date(newLead.updatedAt),
         },
-      });
-      console.log(`[Supabase Lead Criado] ${newLead.codigoFormatado} - ${newLead.nome}`);
-    } catch (err) {
-      console.error('[Supabase Create Error] Falha ao gravar no Supabase:', err);
-    }
-  }
-
-  const fileLeads = loadLeadsFromFile();
-  fileLeads.unshift(newLead);
-  saveLeadsToFile(fileLeads);
+  });
+  console.log(`[Supabase Lead Criado] ${newLead.codigoFormatado} - ${newLead.nome}`);
   return newLead;
 }
 
@@ -203,52 +170,37 @@ async function updateLeadRecord(idOrCode: string, updates: Partial<LeadRecord>):
   const now = new Date();
   const nowStr = now.toISOString();
 
-  if (Boolean(process.env.DATABASE_URL)) {
-    try {
-      const dataToUpdate: any = { updatedAt: now };
-      if (updates.status) dataToUpdate.status = updates.status;
-      if (updates.whatsappClickedAt !== undefined) {
-        dataToUpdate.whatsappClickedAt = updates.whatsappClickedAt ? new Date(updates.whatsappClickedAt) : null;
-      }
-      if (updates.recuperadoAt !== undefined) {
-        dataToUpdate.recuperadoAt = updates.recuperadoAt ? new Date(updates.recuperadoAt) : null;
-      }
-      if (updates.convertidoAt !== undefined) {
-        dataToUpdate.convertidoAt = updates.convertidoAt ? new Date(updates.convertidoAt) : null;
-      }
-      if (updates.valorConversao !== undefined) dataToUpdate.valorConversao = updates.valorConversao;
-      if (updates.observacoes !== undefined) dataToUpdate.observacoes = updates.observacoes;
-
-      await prisma.atendimento.updateMany({
-        where: {
-          OR: [{ id: idOrCode }, { codigoFormatado: idOrCode }],
-        },
-        data: dataToUpdate,
-      });
-    } catch (err) {
-      console.error('[Supabase Update Error] Falha ao atualizar no Supabase:', err);
-    }
+  if (!databaseAvailable) {
+    throw new Error('DATABASE_URL não configurada. O banco de dados é obrigatório.');
   }
 
-  const fileLeads = loadLeadsFromFile();
-  const index = fileLeads.findIndex((l) => l.id === idOrCode || l.codigoFormatado === idOrCode);
-  if (index !== -1) {
-    fileLeads[index] = {
-      ...fileLeads[index],
-      ...updates,
-      updatedAt: nowStr,
-    };
-    saveLeadsToFile(fileLeads);
-    return fileLeads[index];
+  const dataToUpdate: any = { updatedAt: now };
+  if (updates.status) dataToUpdate.status = updates.status;
+  if (updates.whatsappClickedAt !== undefined) {
+    dataToUpdate.whatsappClickedAt = updates.whatsappClickedAt ? new Date(updates.whatsappClickedAt) : null;
   }
-
-  const currentLeads = await loadLeads();
-  const found = currentLeads.find((l) => l.id === idOrCode || l.codigoFormatado === idOrCode);
-  if (found) {
-    return { ...found, ...updates, updatedAt: nowStr };
+  if (updates.recuperadoAt !== undefined) {
+    dataToUpdate.recuperadoAt = updates.recuperadoAt ? new Date(updates.recuperadoAt) : null;
   }
+  if (updates.convertidoAt !== undefined) {
+    dataToUpdate.convertidoAt = updates.convertidoAt ? new Date(updates.convertidoAt) : null;
+  }
+  if (updates.valorConversao !== undefined) dataToUpdate.valorConversao = updates.valorConversao;
+  if (updates.observacoes !== undefined) dataToUpdate.observacoes = updates.observacoes;
 
-  return null;
+  const result = await prisma.atendimento.updateMany({
+    where: {
+      OR: [{ id: idOrCode }, { codigoFormatado: idOrCode }],
+    },
+    data: dataToUpdate,
+  });
+
+  if (result.count === 0) return null;
+  const updated = await prisma.atendimento.findFirst({
+    where: { OR: [{ id: idOrCode }, { codigoFormatado: idOrCode }] },
+  });
+  if (!updated) return null;
+  return (await loadLeads()).find((lead) => lead.id === updated.id) || null;
 }
 
 async function startServer() {
@@ -645,119 +597,9 @@ async function startServer() {
     }
   });
 
-  // 9. Seed Demo Leads
+  // 9. Seed Demo Leads (Desativado)
   app.post('/api/leads/seed-demo', async (req, res) => {
     return res.status(404).json({ error: 'Rota desativada.' });
-
-    try {
-      const demoData: LeadRecord[] = [
-        {
-          id: 'clq_1084_fp',
-          codigoFormatado: '#FP-1084',
-          nome: 'Mariana Silveira',
-          telefone: '21988223344',
-          tipoFormula: 'Medicamento Manipulado',
-          possuiReceita: 'Já possuo receita médica',
-          localizacao: 'Niterói (Icaraí)',
-          objetivo: 'Fórmula personalizada',
-          conhecimentoFormula: 'Já tenho a fórmula prescrita',
-          status: 'QUALIFICADO_AGUARDANDO_WHATSAPP',
-          origem: 'landing_page_quiz',
-          createdAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-          updatedAt: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
-          whatsappClickedAt: null,
-          recuperadoAt: null,
-          convertidoAt: null,
-          valorConversao: null,
-          observacoes: null,
-        },
-        {
-          id: 'clq_1082_fp',
-          codigoFormatado: '#FP-1082',
-          nome: 'Carlos Eduardo Nogueira',
-          telefone: '21971234567',
-          tipoFormula: 'Suplementação / Vitaminas',
-          possuiReceita: 'Ainda não possuo receita',
-          localizacao: 'São Gonçalo (Centro)',
-          objetivo: 'Suplementação para treino e imunidade',
-          conhecimentoFormula: 'Gostaria de falar com o time',
-          status: 'QUALIFICADO_AGUARDANDO_WHATSAPP',
-          origem: 'landing_page_quiz',
-          createdAt: new Date(Date.now() - 95 * 60 * 1000).toISOString(),
-          updatedAt: new Date(Date.now() - 95 * 60 * 1000).toISOString(),
-          whatsappClickedAt: null,
-          recuperadoAt: null,
-          convertidoAt: null,
-          valorConversao: null,
-          observacoes: null,
-        },
-        {
-          id: 'clq_1080_fp',
-          codigoFormatado: '#FP-1080',
-          nome: 'Luciana Martins Pereira',
-          telefone: '21998765432',
-          tipoFormula: 'Dermocosméticos & Cuidado Facial',
-          possuiReceita: 'Já possuo receita médica',
-          localizacao: 'Niterói (Ingá)',
-          objetivo: 'Cuidados anti-idade e clareador',
-          conhecimentoFormula: 'Prescrição de dermatologista',
-          status: 'CONVERTIDO', // Convertido em venda
-          origem: 'landing_page_quiz',
-          createdAt: new Date(Date.now() - 150 * 60 * 1000).toISOString(),
-          updatedAt: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
-          whatsappClickedAt: new Date(Date.now() - 148 * 60 * 1000).toISOString(),
-          recuperadoAt: null,
-          convertidoAt: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
-          valorConversao: 184.50,
-          observacoes: 'Orçamento aprovado. Entregue na filial Icaraí.',
-        },
-        {
-          id: 'clq_1079_fp',
-          codigoFormatado: '#FP-1079',
-          nome: 'Beatriz Vasconcelos',
-          telefone: '21995432198',
-          tipoFormula: 'Dermocosméticos & Cuidado Facial',
-          possuiReceita: 'Já possuo receita médica',
-          localizacao: 'Niterói (Santa Rosa)',
-          objetivo: 'Cuidados com a pele e manchas',
-          conhecimentoFormula: 'Tenho indicação de dermatologista',
-          status: 'QUALIFICADO_AGUARDANDO_WHATSAPP',
-          origem: 'landing_page_quiz',
-          createdAt: new Date(Date.now() - 180 * 60 * 1000).toISOString(),
-          updatedAt: new Date(Date.now() - 180 * 60 * 1000).toISOString(),
-          whatsappClickedAt: null,
-          recuperadoAt: null,
-          convertidoAt: null,
-          valorConversao: null,
-          observacoes: null,
-        },
-        {
-          id: 'clq_1065_fp',
-          codigoFormatado: '#FP-1065',
-          nome: 'Rodrigo Fontes',
-          telefone: '21981112233',
-          tipoFormula: 'Medicamento Manipulado',
-          possuiReceita: 'Já possuo receita médica',
-          localizacao: 'Rio de Janeiro (Outra região)',
-          objetivo: 'Fórmula personalizada',
-          conhecimentoFormula: 'Já tenho a fórmula',
-          status: 'WHATSAPP_INICIADO',
-          origem: 'landing_page_quiz',
-          createdAt: new Date(Date.now() - 240 * 60 * 1000).toISOString(),
-          updatedAt: new Date(Date.now() - 239 * 60 * 1000).toISOString(),
-          whatsappClickedAt: new Date(Date.now() - 239 * 60 * 1000).toISOString(),
-          recuperadoAt: null,
-          convertidoAt: null,
-          valorConversao: null,
-          observacoes: 'Em negociação de envio por motoboy',
-        },
-      ];
-
-      saveLeadsToFile(demoData);
-      res.json({ success: true, count: demoData.length });
-    } catch (err: any) {
-      res.status(500).json({ error: 'Erro ao gerar dados demo.' });
-    }
   });
 
   // Tenta iniciar na porta desejada; se EADDRINUSE, tenta a próxima
@@ -784,9 +626,8 @@ async function startServer() {
 
   // Do not delay the frontend while an unavailable database connection times out.
   void ensureDashboardUser().catch((err) => {
-    databaseAvailable = false;
     console.error(
-      'Banco de dados indisponível; usando armazenamento local. Verifique DATABASE_URL e DIRECT_URL.',
+      'Banco de dados indisponível; as rotas de leads permanecerão indisponíveis. Verifique DATABASE_URL e DIRECT_URL.',
       err instanceof Error ? err.message.split('\n')[0] : err,
     );
   });
