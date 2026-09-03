@@ -98,68 +98,158 @@ function saveLeadsToFile(leads: LeadRecord[]) {
 }
 
 async function loadLeads(): Promise<LeadRecord[]> {
-  if (databaseAvailable) {
+  if (Boolean(process.env.DATABASE_URL)) {
     try {
-      const leads = await prisma.atendimento.findMany({ orderBy: { createdAt: 'desc' } });
-      return leads.map((lead) => ({
-        ...lead,
-        status: lead.status as LeadRecord['status'],
-        createdAt: lead.createdAt.toISOString(),
-        updatedAt: lead.updatedAt.toISOString(),
-        whatsappClickedAt: lead.whatsappClickedAt?.toISOString() ?? null,
-        recuperadoAt: lead.recuperadoAt?.toISOString() ?? null,
-        convertidoAt: lead.convertidoAt?.toISOString() ?? null,
-      }));
+      const dbLeads = await prisma.atendimento.findMany({ orderBy: { createdAt: 'desc' } });
+      if (dbLeads.length > 0) {
+        return dbLeads.map((lead) => ({
+          id: lead.id,
+          codigoFormatado: lead.codigoFormatado,
+          nome: lead.nome,
+          telefone: lead.telefone,
+          tipoFormula: lead.tipoFormula,
+          possuiReceita: lead.possuiReceita,
+          localizacao: lead.localizacao,
+          objetivo: lead.objetivo ?? undefined,
+          conhecimentoFormula: lead.conhecimentoFormula ?? undefined,
+          status: lead.status as LeadRecord['status'],
+          origem: lead.origem,
+          ip: lead.ip ?? undefined,
+          userAgent: lead.userAgent ?? undefined,
+          whatsappClickedAt: lead.whatsappClickedAt?.toISOString() ?? null,
+          recuperadoAt: lead.recuperadoAt?.toISOString() ?? null,
+          convertidoAt: lead.convertidoAt?.toISOString() ?? null,
+          valorConversao: lead.valorConversao ?? null,
+          observacoes: lead.observacoes ?? null,
+          createdAt: lead.createdAt.toISOString(),
+          updatedAt: lead.updatedAt.toISOString(),
+        }));
+      }
     } catch (err) {
-      databaseAvailable = false;
-      console.error('Supabase indisponível; usando armazenamento local:', err);
+      console.error('[Supabase Read Error] Usando armazenamento local de fallback:', err);
     }
   }
 
   return loadLeadsFromFile();
 }
 
-async function saveLeads(leads: LeadRecord[]) {
-  if (databaseAvailable) {
+async function getNextCodeFormatted(): Promise<string> {
+  const leads = await loadLeads();
+  let max = 1084;
+  for (const l of leads) {
+    if (l.codigoFormatado) {
+      const match = l.codigoFormatado.match(/#FP-(\d+)/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > max) max = num;
+      }
+    }
+  }
+  return `#FP-${max + 1}`;
+}
+
+async function createLeadRecord(leadData: Omit<LeadRecord, 'id' | 'codigoFormatado' | 'createdAt' | 'updatedAt'>): Promise<LeadRecord> {
+  const codigoFormatado = await getNextCodeFormatted();
+  const id = `clq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const nowStr = new Date().toISOString();
+
+  const newLead: LeadRecord = {
+    ...leadData,
+    id,
+    codigoFormatado,
+    createdAt: nowStr,
+    updatedAt: nowStr,
+  };
+
+  if (Boolean(process.env.DATABASE_URL)) {
     try {
-      await prisma.$transaction([
-        prisma.atendimento.deleteMany(),
-        prisma.atendimento.createMany({
-          data: leads.map((lead) => ({
-            id: lead.id,
-            codigoFormatado: lead.codigoFormatado,
-            nome: lead.nome,
-            telefone: lead.telefone,
-            tipoFormula: lead.tipoFormula,
-            possuiReceita: lead.possuiReceita,
-            localizacao: lead.localizacao,
-            objetivo: lead.objetivo,
-            conhecimentoFormula: lead.conhecimentoFormula,
-            status: lead.status as any,
-            origem: lead.origem,
-            ip: lead.ip,
-            userAgent: lead.userAgent,
-            whatsappClickedAt: lead.whatsappClickedAt ? new Date(lead.whatsappClickedAt) : null,
-            recuperadoAt: lead.recuperadoAt ? new Date(lead.recuperadoAt) : null,
-            convertidoAt: lead.convertidoAt ? new Date(lead.convertidoAt) : null,
-            valorConversao: lead.valorConversao,
-            observacoes: lead.observacoes,
-            createdAt: new Date(lead.createdAt),
-            updatedAt: new Date(lead.updatedAt),
-          })),
-        }),
-      ]);
-      return;
+      await prisma.atendimento.create({
+        data: {
+          id: newLead.id,
+          codigoFormatado: newLead.codigoFormatado,
+          nome: newLead.nome,
+          telefone: newLead.telefone,
+          tipoFormula: newLead.tipoFormula,
+          possuiReceita: newLead.possuiReceita,
+          localizacao: newLead.localizacao,
+          objetivo: newLead.objetivo,
+          conhecimentoFormula: newLead.conhecimentoFormula,
+          status: newLead.status as any,
+          origem: newLead.origem,
+          ip: newLead.ip,
+          userAgent: newLead.userAgent,
+          whatsappClickedAt: newLead.whatsappClickedAt ? new Date(newLead.whatsappClickedAt) : null,
+          recuperadoAt: newLead.recuperadoAt ? new Date(newLead.recuperadoAt) : null,
+          convertidoAt: newLead.convertidoAt ? new Date(newLead.convertidoAt) : null,
+          valorConversao: newLead.valorConversao,
+          observacoes: newLead.observacoes,
+          createdAt: new Date(newLead.createdAt),
+          updatedAt: new Date(newLead.updatedAt),
+        },
+      });
+      console.log(`[Supabase Lead Criado] ${newLead.codigoFormatado} - ${newLead.nome}`);
     } catch (err) {
-      databaseAvailable = false;
-      console.error('Falha ao gravar no Supabase; usando armazenamento local:', err);
+      console.error('[Supabase Create Error] Falha ao gravar no Supabase:', err);
     }
   }
 
-  saveLeadsToFile(leads);
+  const fileLeads = loadLeadsFromFile();
+  fileLeads.unshift(newLead);
+  saveLeadsToFile(fileLeads);
+  return newLead;
 }
 
-let codeCounter = 1085;
+async function updateLeadRecord(idOrCode: string, updates: Partial<LeadRecord>): Promise<LeadRecord | null> {
+  const now = new Date();
+  const nowStr = now.toISOString();
+
+  if (Boolean(process.env.DATABASE_URL)) {
+    try {
+      const dataToUpdate: any = { updatedAt: now };
+      if (updates.status) dataToUpdate.status = updates.status;
+      if (updates.whatsappClickedAt !== undefined) {
+        dataToUpdate.whatsappClickedAt = updates.whatsappClickedAt ? new Date(updates.whatsappClickedAt) : null;
+      }
+      if (updates.recuperadoAt !== undefined) {
+        dataToUpdate.recuperadoAt = updates.recuperadoAt ? new Date(updates.recuperadoAt) : null;
+      }
+      if (updates.convertidoAt !== undefined) {
+        dataToUpdate.convertidoAt = updates.convertidoAt ? new Date(updates.convertidoAt) : null;
+      }
+      if (updates.valorConversao !== undefined) dataToUpdate.valorConversao = updates.valorConversao;
+      if (updates.observacoes !== undefined) dataToUpdate.observacoes = updates.observacoes;
+
+      await prisma.atendimento.updateMany({
+        where: {
+          OR: [{ id: idOrCode }, { codigoFormatado: idOrCode }],
+        },
+        data: dataToUpdate,
+      });
+    } catch (err) {
+      console.error('[Supabase Update Error] Falha ao atualizar no Supabase:', err);
+    }
+  }
+
+  const fileLeads = loadLeadsFromFile();
+  const index = fileLeads.findIndex((l) => l.id === idOrCode || l.codigoFormatado === idOrCode);
+  if (index !== -1) {
+    fileLeads[index] = {
+      ...fileLeads[index],
+      ...updates,
+      updatedAt: nowStr,
+    };
+    saveLeadsToFile(fileLeads);
+    return fileLeads[index];
+  }
+
+  const currentLeads = await loadLeads();
+  const found = currentLeads.find((l) => l.id === idOrCode || l.codigoFormatado === idOrCode);
+  if (found) {
+    return { ...found, ...updates, updatedAt: nowStr };
+  }
+
+  return null;
+}
 
 async function startServer() {
   const app = express();
@@ -282,14 +372,7 @@ async function startServer() {
         return res.status(400).json({ error: 'Nome e telefone são obrigatórios.' });
       }
 
-      const leads = await loadLeads();
-      const nextCodeNumber = codeCounter++;
-      const codigoFormatado = `#FP-${nextCodeNumber}`;
-      const id = `clq_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-
-      const newLead: LeadRecord = {
-        id,
-        codigoFormatado,
+      const newLead = await createLeadRecord({
         nome: String(nome).trim(),
         telefone: String(telefone).trim(),
         tipoFormula: String(tipoFormula || 'Fórmula manipulada'),
@@ -303,15 +386,12 @@ async function startServer() {
         userAgent: req.headers['user-agent'],
         whatsappClickedAt: null,
         recuperadoAt: null,
+        convertidoAt: null,
+        valorConversao: null,
         observacoes: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+      });
 
-      leads.unshift(newLead);
-      await saveLeads(leads);
-
-      console.log(`[Lead Criado] ${codigoFormatado} - ${newLead.nome} (Status: ${newLead.status})`);
+      console.log(`[Lead Criado] ${newLead.codigoFormatado} - ${newLead.nome} (Status: ${newLead.status})`);
 
       res.status(201).json({
         success: true,
@@ -324,29 +404,24 @@ async function startServer() {
   });
 
   // 2. Registrar Clique no WhatsApp (Altera status para WHATSAPP_INICIADO)
-  // Regra fundamental: este lead deixará de aparecer na fila de recuperação do dashboard
   app.patch('/api/leads/:id/whatsapp-click', async (req, res) => {
     try {
       const { id } = req.params;
-      const leads = await loadLeads();
-      const index = leads.findIndex((l) => l.id === id || l.codigoFormatado === id);
+      const now = new Date().toISOString();
+      const updated = await updateLeadRecord(id, {
+        status: 'WHATSAPP_INICIADO',
+        whatsappClickedAt: now,
+      });
 
-      if (index === -1) {
+      if (!updated) {
         return res.status(404).json({ error: 'Atendimento não encontrado.' });
       }
 
-      const now = new Date().toISOString();
-      leads[index].status = 'WHATSAPP_INICIADO';
-      leads[index].whatsappClickedAt = now;
-      leads[index].updatedAt = now;
-
-      await saveLeads(leads);
-
-      console.log(`[WhatsApp Iniciado] ${leads[index].codigoFormatado} - ${leads[index].nome} -> Removido da fila de recuperação`);
+      console.log(`[WhatsApp Iniciado] ${updated.codigoFormatado} - ${updated.nome}`);
 
       res.json({
         success: true,
-        lead: leads[index],
+        lead: updated,
       });
     } catch (err: any) {
       console.error('Erro ao atualizar status do WhatsApp:', err);
@@ -360,7 +435,6 @@ async function startServer() {
       const { q } = req.query;
       const leads = await loadLeads();
 
-      // FILTRO CRUCIAL: Apenas quem foi qualificado e NÃO clicou no WhatsApp
       let recoveryLeads = leads.filter(
         (l) => l.status === 'QUALIFICADO_AGUARDANDO_WHATSAPP'
       );
@@ -377,7 +451,6 @@ async function startServer() {
         );
       }
 
-      // Ordenar do mais recente para o mais antigo
       recoveryLeads.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
       res.json({
@@ -426,7 +499,7 @@ async function startServer() {
     }
   });
 
-  // 5. Atualizar Status Geral do Atendimento (ex: CONVERTIDO, WHATSAPP_INICIADO, RECUPERADO_ATENDIMENTO)
+  // 5. Atualizar Status Geral do Atendimento
   app.patch('/api/leads/:id/status', async (req, res) => {
     try {
       const { id } = req.params;
@@ -436,39 +509,32 @@ async function startServer() {
         return res.status(400).json({ error: 'Status é obrigatório.' });
       }
 
-      const leads = await loadLeads();
-      const index = leads.findIndex((l) => l.id === id || l.codigoFormatado === id);
-
-      if (index === -1) {
-        return res.status(404).json({ error: 'Atendimento não encontrado.' });
-      }
-
+      const updates: Partial<LeadRecord> = { status };
       const now = new Date().toISOString();
-      leads[index].status = status;
-      leads[index].updatedAt = now;
 
       if (status === 'CONVERTIDO') {
-        leads[index].convertidoAt = now;
-        if (valorConversao) {
-          leads[index].valorConversao = Number(valorConversao);
-        }
+        updates.convertidoAt = now;
+        if (valorConversao) updates.valorConversao = Number(valorConversao);
       } else if (status === 'RECUPERADO_ATENDIMENTO') {
-        leads[index].recuperadoAt = now;
+        updates.recuperadoAt = now;
       } else if (status === 'WHATSAPP_INICIADO') {
-        leads[index].whatsappClickedAt = leads[index].whatsappClickedAt || now;
+        updates.whatsappClickedAt = now;
       }
 
       if (observacoes !== undefined) {
-        leads[index].observacoes = String(observacoes);
+        updates.observacoes = String(observacoes);
       }
 
-      await saveLeads(leads);
+      const updated = await updateLeadRecord(id, updates);
+      if (!updated) {
+        return res.status(404).json({ error: 'Atendimento não encontrado.' });
+      }
 
-      console.log(`[Status Atualizado] ${leads[index].codigoFormatado} -> ${status}`);
+      console.log(`[Status Atualizado] ${updated.codigoFormatado} -> ${status}`);
 
       res.json({
         success: true,
-        lead: leads[index],
+        lead: updated,
       });
     } catch (err: any) {
       console.error('Erro ao atualizar status do lead:', err);
@@ -481,31 +547,25 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { valorConversao, observacoes } = req.body;
-      const leads = await loadLeads();
-      const index = leads.findIndex((l) => l.id === id || l.codigoFormatado === id);
+      const now = new Date().toISOString();
 
-      if (index === -1) {
+      const updates: Partial<LeadRecord> = {
+        status: 'CONVERTIDO',
+        convertidoAt: now,
+      };
+      if (valorConversao) updates.valorConversao = Number(valorConversao);
+      if (observacoes) updates.observacoes = String(observacoes);
+
+      const updated = await updateLeadRecord(id, updates);
+      if (!updated) {
         return res.status(404).json({ error: 'Atendimento não encontrado.' });
       }
 
-      const now = new Date().toISOString();
-      leads[index].status = 'CONVERTIDO';
-      leads[index].convertidoAt = now;
-      leads[index].updatedAt = now;
-      if (valorConversao) {
-        leads[index].valorConversao = Number(valorConversao);
-      }
-      if (observacoes) {
-        leads[index].observacoes = String(observacoes);
-      }
-
-      await saveLeads(leads);
-
-      console.log(`[Venda/Fórmula CONVERTIDA!] ${leads[index].codigoFormatado} - ${leads[index].nome}`);
+      console.log(`[Venda/Fórmula CONVERTIDA!] ${updated.codigoFormatado} - ${updated.nome}`);
 
       res.json({
         success: true,
-        lead: leads[index],
+        lead: updated,
       });
     } catch (err: any) {
       console.error('Erro ao converter lead:', err);
@@ -518,26 +578,22 @@ async function startServer() {
     try {
       const { id } = req.params;
       const { observacoes } = req.body;
-      const leads = await loadLeads();
-      const index = leads.findIndex((l) => l.id === id || l.codigoFormatado === id);
+      const now = new Date().toISOString();
 
-      if (index === -1) {
+      const updates: Partial<LeadRecord> = {
+        status: 'RECUPERADO_ATENDIMENTO',
+        recuperadoAt: now,
+      };
+      if (observacoes) updates.observacoes = String(observacoes);
+
+      const updated = await updateLeadRecord(id, updates);
+      if (!updated) {
         return res.status(404).json({ error: 'Atendimento não encontrado.' });
       }
 
-      const now = new Date().toISOString();
-      leads[index].status = 'RECUPERADO_ATENDIMENTO';
-      leads[index].recuperadoAt = now;
-      leads[index].updatedAt = now;
-      if (observacoes) {
-        leads[index].observacoes = String(observacoes);
-      }
-
-      await saveLeads(leads);
-
       res.json({
         success: true,
-        lead: leads[index],
+        lead: updated,
       });
     } catch (err: any) {
       console.error('Erro ao marcar como contatado:', err);
@@ -697,7 +753,7 @@ async function startServer() {
         },
       ];
 
-      await saveLeads(demoData);
+      saveLeadsToFile(demoData);
       res.json({ success: true, count: demoData.length });
     } catch (err: any) {
       res.status(500).json({ error: 'Erro ao gerar dados demo.' });
